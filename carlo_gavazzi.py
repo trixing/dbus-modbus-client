@@ -22,27 +22,36 @@ class Reg_ver(Reg, int):
         v = values[0]
         return self.update((v >> 12, v >> 8 & 0xf, v & 0xff))
 
-nr_phases = [ 3, 3, 2, 1, 3 ]
 
-phase_configs = [
-    '3P.n',
-    '3P.1',
-    '2P',
-    '1P',
-    '3P',
-]
+class Reg_serial(Reg, str):
 
-switch_positions = [
-    'kVARh',
-    '2',
-    '1',
-    'Locked',
-]
+    def decode(self, values):
+        newval = ''.join([chr(v) for v in values])
+        return self.update(newval)
+
 
 class EM24_Meter(device.CustomName, device.EnergyMeter):
     productid = 0xb017
     productname = 'Carlo Gavazzi EM24 Ethernet Energy Meter'
     min_timeout = 0.5
+
+    nr_phases_configs = [ 3, 3, 2, 1, 3 ]
+
+    phase_configs = [
+        '3P.n',
+        '3P.1',
+        '2P',
+        '1P',
+        '3P',
+    ]
+
+    switch_positions = [
+        'kVARh',
+        '2',
+        '1',
+        'Locked',
+    ]
+
 
     def __init__(self, *args):
         super(EM24_Meter, self).__init__(*args)
@@ -50,7 +59,7 @@ class EM24_Meter(device.CustomName, device.EnergyMeter):
         self.info_regs = [
             Reg_ver( 0x0302, '/HardwareVersion'),
             Reg_ver( 0x0304, '/FirmwareVersion'),
-            Reg_u16( 0x1002, '/PhaseConfig', text=phase_configs, write=(0, 4)),
+            Reg_u16( 0x1002, '/PhaseConfig', text=self.phase_configs, write=(0, 4)),
             Reg_text(0x5000, 7, '/Serial'),
         ]
 
@@ -77,14 +86,14 @@ class EM24_Meter(device.CustomName, device.EnergyMeter):
 
         self.read_info()
 
-        phases = nr_phases[int(self.info['/PhaseConfig'])]
+        phases = self.nr_phases_configs[int(self.info['/PhaseConfig'])]
 
         regs = [
             Reg_s32l(0x0028, '/Ac/Power',          10, '%.1f W'),
             Reg_u16( 0x0033, '/Ac/Frequency',      10, '%.1f Hz'),
             Reg_s32l(0x0034, '/Ac/Energy/Forward', 10, '%.1f kWh'),
             Reg_s32l(0x004e, '/Ac/Energy/Reverse', 10, '%.1f kWh'),
-            Reg_u16( 0xa100, '/SwitchPos', text=switch_positions),
+            Reg_u16( 0xa100, '/SwitchPos', text=self.switch_positions),
         ]
 
         if phases == 3:
@@ -110,6 +119,13 @@ class ET340_Meter(device.CustomName, device.EnergyMeter):
     productid = 0xb345
     productname = 'Carlo Gavazzi ET340 Total Energy Meter'
     min_timeout = 0.5
+    nr_phases_configs = [ 3, 3, 2 ]
+
+    phase_configs = [
+      '3P.n',
+      '3P',
+      '2P',
+    ]
 
     def __init__(self, *args):
         super(ET340_Meter, self).__init__(*args)
@@ -117,8 +133,8 @@ class ET340_Meter(device.CustomName, device.EnergyMeter):
         self.info_regs = [
             Reg_u16( 0x0302, '/HardwareVersion'), # versioncode
             Reg_u16( 0x0303, '/FirmwareVersion'), # revisioncode
-            Reg_u16( 0x1002, '/PhaseConfig', text=phase_configs, write=(0, 4)),
-            Reg_text(0x5000, 7, '/Serial'),
+            Reg_u16( 0x1002, '/PhaseConfig', text=self.phase_configs, write=(0, 2)),
+            Reg_serial(0x5000, 7, '/Serial'),
             Reg_u16(0x5010, '/ProductionYear'),
         ]
 
@@ -138,7 +154,6 @@ class ET340_Meter(device.CustomName, device.EnergyMeter):
             Reg_s32l(0x0000 + s, '/Ac/L%d/Voltage' % n,        10, '%.1f V'),
             Reg_s32l(0x000c + s, '/Ac/L%d/Current' % n,      1000, '%.1f A'),
             Reg_s32l(0x0012 + s, '/Ac/L%d/Power' % n,          10, '%.1f W'),
-            # Reg_s32l(0x0040 + s, '/Ac/L%d/Energy/Forward' % n, 10, '%.1f kWh'),
         ]
 
     def init_device_settings(self, dbus):
@@ -163,7 +178,7 @@ class ET340_Meter(device.CustomName, device.EnergyMeter):
 
         self.read_info()
 
-        phases = nr_phases[int(self.info['/PhaseConfig'])]
+        phases = self.nr_phases_configs[int(self.info['/PhaseConfig'])]
 
         regs = [
             Reg_s32l(0x0028, '/Ac/Power',          10, '%.1f W'),
@@ -189,20 +204,13 @@ class ET340_Meter(device.CustomName, device.EnergyMeter):
         # locking up with faster updates (see some commentary
         # on 2.9x release)
         if dt < 0.8:
-            continue
+            return
         if dt > 10:
             log.error('Update interval too long, skipping')
             return
         self.last_update = now
 
-        print(dir(self.dbus['/Ac/Power']))
-        power = str(self.dbus['/Ac/Power'])
-        if power and ' ' in power:
-            v = power.split(' ')
-            power = float(v[0])
-        else:
-            log.error('No valid power: %s' % power)
-            return
+        power = self.dbus['/Ac/Power'].value
 
         energy = power * dt / 3600 / 1000 # kwh
         if energy > 0:
@@ -224,7 +232,7 @@ class ET340_Meter(device.CustomName, device.EnergyMeter):
         self.sched_reinit()
 
     def get_ident(self):
-        return 'cg_%s' % '123' # self.info['/Serial']
+        return 'cg_%s' % self.info['/Serial'].value
 
 
 
@@ -254,16 +262,16 @@ models = {
         'handler':  EM24_Meter,
     },
 }
-
-models_rtu = {
-    345: {
-        'model': 'ET340',
-        'handler': ET340_Meter,
-        }
-}
 probe.add_handler(probe.ModelRegister(Reg_u16(0x000b), models,
                                       methods=['tcp'],
                                       units=[1]))
+
+models_rtu = {
+    345: {
+        'model': 'ET340DINAV23XS1X',
+        'handler': ET340_Meter,
+        }
+}
 probe.add_handler(probe.ModelRegister(Reg_u16(0x000b), models_rtu,
                                       methods=['rtu'],
                                       rates=[9600],

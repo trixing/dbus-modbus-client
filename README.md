@@ -12,8 +12,8 @@ Install is a bit cumbersome, one possibility:
 * cp /opt/victronenergy/dbus-modbus-client/{vedbus.py,ve_utils.py,settingsdevice.py,start-serial.sh} .
 * edit /opt/victronenergy/service-templates/dbus-modbus-client.serial/run to point to the new location
 * disable dbus-cgwacs by editing /etc/venus/serial-starter.conf rs485 to `alias rs485 modbus`
-* kill dbus-cgwacs if running
 * restart the serial-starter service (ps, kill)
+* kill dbus-cgwacs if running: `svc -d /service/dbus-cgwacs.ttyUSB?`
 
 # dbus-modbus-client
 

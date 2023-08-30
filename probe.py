@@ -20,7 +20,8 @@ def probe(mlist, pr_cb=None, pr_interval=10, timeout=None, filt=None):
         try:
             modbus = client.make_client(m)
             unit = m.unit
-        except:
+        except Exception as ex:
+            log.error("Error while reading %s: %s" % (m, ex))
             continue
 
         if not modbus:
@@ -46,7 +47,8 @@ def probe(mlist, pr_cb=None, pr_interval=10, timeout=None, filt=None):
                     t1 = time.time()
                     if d:
                         break
-            except:
+            except Exception as ex:
+                log.error("Error while probing %s: %s" % (u, ex))
                 break
 
             if d:

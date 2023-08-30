@@ -1,3 +1,18 @@
+# Modified version with ET340 total phase sum support
+
+Addresses wrong measurements e.g. in German grid where the total of phases is important
+
+## Custom Install
+
+Install is a bit cumbersome, one possibility:
+
+* cd /data
+* git clone ...
+* cd dbus-modbus-client
+* cp /opt/victronenergy/dbus-modbus-client/{vedbus.py,ve_utils.py,settingsdevice.py} .
+* edit /opt/victronenergy/service-templates/dbus-modbus-client.serial/run to point to the new location
+* disable dbus-cgwacs by editing /etc/venus/serial-starter.conf rs485 to `alias rs485 modbus`
+
 # dbus-modbus-client
 
 Reads data from Modbus devices and publishes on D-Bus.  Service names and

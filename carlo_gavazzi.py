@@ -1,4 +1,5 @@
 import logging
+import time
 
 import device
 import probe
@@ -104,6 +105,129 @@ class EM24_Meter(device.CustomName, device.EnergyMeter):
     def get_ident(self):
         return 'cg_%s' % self.info['/Serial']
 
+
+class ET340_Meter(device.CustomName, device.EnergyMeter):
+    productid = 0xb345
+    productname = 'Carlo Gavazzi ET340 Total Energy Meter'
+    min_timeout = 0.5
+
+    def __init__(self, *args):
+        super(ET340_Meter, self).__init__(*args)
+
+        self.info_regs = [
+            Reg_u16( 0x0302, '/HardwareVersion'), # versioncode
+            Reg_u16( 0x0303, '/FirmwareVersion'), # revisioncode
+            Reg_u16( 0x1002, '/PhaseConfig', text=phase_configs, write=(0, 4)),
+            Reg_text(0x5000, 7, '/Serial'),
+            Reg_u16(0x5010, '/ProductionYear'),
+        ]
+
+    def init(self, dbus):
+        super(ET340_Meter, self).init(dbus)
+        self.dbus.add_path('/Ac/Energy/Forward', None, writeable=True)
+        self.dbus.add_path('/Ac/Energy/Reverse', None, writeable=True)
+        self.energy_forward = self.ef.get_value() or 0.0
+        self.energy_reverse = self.er.get_value() or 0.0
+        log.info('Loaded saved energy counters: F%.6f kWh R%.6f kWh' % (self.energy_forward, self.energy_reverse))
+        self.last_update = time.time()
+        self.last_checkpoint = time.time()
+
+    def phase_regs(self, n):
+        s = 2 * (n - 1)
+        return [
+            Reg_s32l(0x0000 + s, '/Ac/L%d/Voltage' % n,        10, '%.1f V'),
+            Reg_s32l(0x000c + s, '/Ac/L%d/Current' % n,      1000, '%.1f A'),
+            Reg_s32l(0x0012 + s, '/Ac/L%d/Power' % n,          10, '%.1f W'),
+            # Reg_s32l(0x0040 + s, '/Ac/L%d/Energy/Forward' % n, 10, '%.1f kWh'),
+        ]
+
+    def init_device_settings(self, dbus):
+        super(ET340_Meter, self).init_device_settings(dbus)
+        path = '/Settings/Devices/' + self.get_ident()
+        self.ef = self.settings.addSetting(path + '/EnergyForward', 0.0, 0, 0)
+        self.er = self.settings.addSetting(path + '/EnergyReverse', 0.0, 0, 0)
+
+    def device_init(self):
+        # make sure measurement mode is set to B (1) - positive and negative power
+        appreg = Reg_u16(0x1103)
+        if self.read_register(appreg) != 1:
+            self.write_register(appreg, 1)
+
+            # read back the value in case the setting is not accepted
+            # for some reason
+            if self.read_register(appreg) != 1:
+                log.error('%s: failed to set measurement mode to B', self)
+                return
+        else:
+            log.info('%s: measurement mode confirmed to be B', self)
+
+        self.read_info()
+
+        phases = nr_phases[int(self.info['/PhaseConfig'])]
+
+        regs = [
+            Reg_s32l(0x0028, '/Ac/Power',          10, '%.1f W'),
+            Reg_u16( 0x0033, '/Ac/Frequency',      10, '%.1f Hz'),
+        ]
+
+        if phases == 3:
+            regs += [
+                Reg_mapu16(0x0032, '/PhaseSequence', { 0: 0, 0xffff: 1 }),
+            ]
+
+        for n in range(1, phases + 1):
+            regs += self.phase_regs(n)
+
+        self.data_regs = regs
+        self.nr_phases = phases
+
+    def update(self):
+        super(ET340_Meter, self).update()
+        now = time.time()
+        dt = now - self.last_update
+        # Limit update rate due to reports of the device
+        # locking up with faster updates (see some commentary
+        # on 2.9x release)
+        if dt < 0.8:
+            continue
+        if dt > 10:
+            log.error('Update interval too long, skipping')
+            return
+        self.last_update = now
+
+        print(dir(self.dbus['/Ac/Power']))
+        power = str(self.dbus['/Ac/Power'])
+        if power and ' ' in power:
+            v = power.split(' ')
+            power = float(v[0])
+        else:
+            log.error('No valid power: %s' % power)
+            return
+
+        energy = power * dt / 3600 / 1000 # kwh
+        if energy > 0:
+            self.energy_forward += energy
+        else:
+            self.energy_reverse += abs(energy)
+        self.dbus['/Ac/Energy/Forward'] = round(self.energy_forward, 1)
+        self.dbus['/Ac/Energy/Reverse'] = round(self.energy_reverse, 1)
+
+        if now - self.last_checkpoint > 300:
+            log.info('Updating saved energy: F%.6f kWh R%.6f kWh' % (self.energy_forward, self.energy_reverse))
+            self.ef.set_value(self.energy_forward)
+            self.er.set_value(self.energy_reverse)
+            self.last_checkpoint = now
+        log.debug('update: dT%.1f P%.1fW dE%f F%.6f R%.6f' % (dt, power, energy, self.energy_forward, self.energy_reverse))
+
+    def dbus_write_register(self, reg, path, val):
+        super(ET340_Meter, self).dbus_write_register(reg, path, val)
+        self.sched_reinit()
+
+    def get_ident(self):
+        return 'cg_%s' % '123' # self.info['/Serial']
+
+
+
 models = {
     1648: {
         'model':    'EM24DINAV23XE1X',
@@ -131,6 +255,16 @@ models = {
     },
 }
 
+models_rtu = {
+    345: {
+        'model': 'ET340',
+        'handler': ET340_Meter,
+        }
+}
 probe.add_handler(probe.ModelRegister(Reg_u16(0x000b), models,
                                       methods=['tcp'],
+                                      units=[1]))
+probe.add_handler(probe.ModelRegister(Reg_u16(0x000b), models_rtu,
+                                      methods=['rtu'],
+                                      rates=[9600],
                                       units=[1]))
